@@ -20,3 +20,10 @@ export const getSummaryStats = async (crop, soil) => {
   });
   return response.data.summary;
 };
+
+export const getDateRange = async (crop, soil) => {
+  const response = await axios.get(`${API_BASE_URL}/date-range`, {
+    params: { crop, soil },
+  });
+  return response.data.windows || [];
+};

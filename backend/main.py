@@ -42,6 +42,12 @@ def get_summary(crop: str = Query(..., description="Crop Name"), soil: str = Que
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-if __name__ == "__main__":
+@app.get("/date-range")
+def get_date_range(crop: str = Query(...), soil: str = Query(...)):
+    try:
+        return data_processing.get_date_range(crop, soil)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

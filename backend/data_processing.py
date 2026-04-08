@@ -32,19 +32,17 @@ def load_and_clean_data(csv_path: str) -> pd.DataFrame:
     # Filter strictly within crop lifecycle
     df = df[(df['CreatedDate'] >= df['CropStartDate']) & (df['CreatedDate'] <= df['CropEndDate'])]
     
-    # Helper to convert units to kg/ha
+    # Clean up UnitS format and strictly keep only 'kg/ha' or 'g/ha' elements
+    df['UnitS'] = df['UnitS'].astype(str).str.lower().str.strip()
+    df = df[df['UnitS'].isin(['kg/ha', 'g/ha'])]
+    
+    # Helper to calculate kg/ha precisely
     def to_kgha(row):
         try:
             val = float(row['ValueS'])
-            u = str(row['UnitS']).lower().strip()
+            u = row['UnitS']
             if u == 'g/ha': return val / 1000.0
-            if u in ('mg/kg', 'mg/kg ds'): return val * 2.0
-            if u == 'g/kg': return val * 2000.0
-            if u == '%': return val * 20000.0
-            if u == 'kg/l': return val * 1500000.0
-            if u == 'mmol/l': return val * 30.0
-            if u == 'g': return val / 1000.0
-            return val
+            return val # implicitly handles 'kg/ha'
         except:
             return 0.0
 
@@ -57,8 +55,14 @@ def load_and_clean_data(csv_path: str) -> pd.DataFrame:
     # Rename for easier access
     df = df.rename(columns={'Plant/Crop': 'Crop'})
     
-    # Aggregate to handle duplicates: by Crop, SoilType, CreatedDate, Measure
-    agg_df = df.groupby(['Crop', 'SoilType', 'CreatedDate', 'Measure']).agg({
+    # Keep BatchId to uniquely identify samples tested on the same date
+    if 'BatchId' not in df.columns:
+        df['BatchId'] = 'Unknown'
+    
+    df['BatchId'] = df['BatchId'].fillna('Unknown')
+    
+    # Aggregate to handle exact measure duplicates within the SAME batch
+    agg_df = df.groupby(['Crop', 'SoilType', 'CreatedDate', 'BatchId', 'CropStartDate', 'CropEndDate', 'Measure']).agg({
         'ValueS': 'mean'
     }).reset_index()
     
@@ -89,19 +93,29 @@ def get_time_series_data(crop: str, soil: str):
     if sub_df.empty:
         return []
     
-    # Pivot to format: { date: "...", Nitrogen: 50, Phosphorus: 20 }
+    # Pivot to format, integrating BatchId to preserve distinct chronologic order of independent samples
     pivot_df = sub_df.pivot_table(
-        index='CreatedDate', 
+        index=['CreatedDate', 'BatchId', 'CropStartDate', 'CropEndDate', 'Crop', 'SoilType'], 
         columns='Measure', 
         values='ValueS', 
-        aggfunc='mean'
+        aggfunc='first'
     ).reset_index()
     
-    pivot_df = pivot_df.sort_values('CreatedDate')
-    pivot_df['date'] = pivot_df['CreatedDate'].dt.strftime('%Y-%m-%d %H:%M')
+    pivot_df = pivot_df.sort_values(['CreatedDate', 'BatchId'])
     
-    # Drop original datetime col and replace NaNs with None for JSON compliance
-    pivot_df = pivot_df.drop(columns=['CreatedDate'])
+    # Form distinct string identifying date and sample batch for X axis/tooltips
+    # We will pass the extra fields untouched; they will be part of the json payload
+    pivot_df['date'] = pivot_df.apply(
+        lambda row: f"{row['CreatedDate'].strftime('%Y-%m-%d %H:%M:%S')} (Batch {row['BatchId']})", 
+        axis=1
+    )
+    
+    # Stringify the lifecycle bounds
+    pivot_df['CropStartDate'] = pivot_df['CropStartDate'].dt.strftime('%Y-%m-%d')
+    pivot_df['CropEndDate'] = pivot_df['CropEndDate'].dt.strftime('%Y-%m-%d')
+    
+    # Drop internal cols
+    pivot_df = pivot_df.drop(columns=['CreatedDate', 'BatchId'])
     pivot_df = pivot_df.replace({np.nan: None})
     
     return pivot_df.to_dict(orient='records')
@@ -136,3 +150,24 @@ def get_summary_stats(crop: str, soil: str):
         })
         
     return summary
+
+def get_date_range(crop: str, soil: str):
+    """Return specific CropStartDate to CropEndDate combinations present in data."""
+    df_raw = pd.read_csv(DATA_PATH)
+    df_raw = df_raw.dropna(subset=['CropStartDate', 'CropEndDate'])
+    df_raw['CropStartDate'] = pd.to_datetime(df_raw['CropStartDate'], dayfirst=True, errors='coerce')
+    df_raw['CropEndDate']   = pd.to_datetime(df_raw['CropEndDate'],   dayfirst=True, errors='coerce')
+    df_raw = df_raw.rename(columns={'Plant/Crop': 'Crop'})
+    sub = df_raw[(df_raw['Crop'] == crop) & (df_raw['SoilType'] == soil)].dropna(subset=['CropStartDate','CropEndDate'])
+    if sub.empty:
+        return {"windows": []}
+        
+    windows = sub[['CropStartDate', 'CropEndDate']].drop_duplicates().sort_values('CropStartDate')
+    
+    out = []
+    for _, row in windows.iterrows():
+        out.append({
+            "start": row['CropStartDate'].strftime('%Y-%m-%d'),
+            "end": row['CropEndDate'].strftime('%Y-%m-%d')
+        })
+    return {"windows": out}
