@@ -25,5 +25,6 @@ export const getDateRange = async (crop, soil) => {
   const response = await axios.get(`${API_BASE_URL}/date-range`, {
     params: { crop, soil },
   });
+  // Each window: { label, first_sample, last_sample }
   return response.data.windows || [];
 };

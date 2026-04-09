@@ -21,7 +21,6 @@ def load_and_clean_data(csv_path: str) -> pd.DataFrame:
     df = df.dropna(subset=['CreatedDate', 'CropStartDate', 'CropEndDate', 'ValueS'])
     
     # Convert dates
-    # Assuming formats like '08-04-2024 14:05' and '08-03-2024'
     df['CreatedDate'] = pd.to_datetime(df['CreatedDate'], dayfirst=True, errors='coerce')
     df['CropStartDate'] = pd.to_datetime(df['CropStartDate'], dayfirst=True, errors='coerce')
     df['CropEndDate'] = pd.to_datetime(df['CropEndDate'], dayfirst=True, errors='coerce')
@@ -42,7 +41,7 @@ def load_and_clean_data(csv_path: str) -> pd.DataFrame:
             val = float(row['ValueS'])
             u = row['UnitS']
             if u == 'g/ha': return val / 1000.0
-            return val # implicitly handles 'kg/ha'
+            return val
         except:
             return 0.0
 
@@ -87,13 +86,11 @@ def get_filters():
 
 def get_time_series_data(crop: str, soil: str):
     df = get_data()
-    # Filter specific crop and soil combination
     sub_df = df[(df['Crop'] == crop) & (df['SoilType'] == soil)]
     
     if sub_df.empty:
         return []
     
-    # Pivot to format, integrating BatchId to preserve distinct chronologic order of independent samples
     pivot_df = sub_df.pivot_table(
         index=['CreatedDate', 'BatchId', 'CropStartDate', 'CropEndDate', 'Crop', 'SoilType'], 
         columns='Measure', 
@@ -103,18 +100,14 @@ def get_time_series_data(crop: str, soil: str):
     
     pivot_df = pivot_df.sort_values(['CreatedDate', 'BatchId'])
     
-    # Form distinct string identifying date and sample batch for X axis/tooltips
-    # We will pass the extra fields untouched; they will be part of the json payload
     pivot_df['date'] = pivot_df.apply(
         lambda row: f"{row['CreatedDate'].strftime('%Y-%m-%d %H:%M:%S')} (Batch {row['BatchId']})", 
         axis=1
     )
     
-    # Stringify the lifecycle bounds
     pivot_df['CropStartDate'] = pivot_df['CropStartDate'].dt.strftime('%Y-%m-%d')
     pivot_df['CropEndDate'] = pivot_df['CropEndDate'].dt.strftime('%Y-%m-%d')
     
-    # Drop internal cols
     pivot_df = pivot_df.drop(columns=['CreatedDate', 'BatchId'])
     pivot_df = pivot_df.replace({np.nan: None})
     
@@ -135,39 +128,67 @@ def get_summary_stats(crop: str, soil: str):
         min_val = float(group['ValueS'].min())
         max_val = float(group['ValueS'].max())
         
-        unit_val = ""
-        if 'UnitS' in group.columns and not group['UnitS'].dropna().empty:
-            unit_val = str(group['UnitS'].dropna().iloc[0])
-            if unit_val.lower() == 'nan': unit_val = ""
-        
         summary.append({
             "measure": measure,
             "latest": last_val,
             "average": avg_val,
             "min": min_val,
             "max": max_val,
-            "unit": unit_val
+            "unit": 'kg/ha'
         })
         
     return summary
 
 def get_date_range(crop: str, soil: str):
-    """Return specific CropStartDate to CropEndDate combinations present in data."""
+    """
+    Build Timeline Focus dropdown options grouped by calendar year of actual samples.
+
+    Logic:
+    - Read all rows for the given crop + soil combination.
+    - Extract the year from each row's CreatedDate (the actual sample date).
+    - Group rows by that year, computing min(CreatedDate) = first_sample
+      and max(CreatedDate) = last_sample within the year.
+    - Build a human-readable label: "Apr 2024 - Aug 2024"
+      (first sample month/year  to  last sample month/year in that year).
+    - Return one entry per year, sorted chronologically by first_sample.
+    - The frontend uses first_sample..last_sample as the inclusive filter bounds.
+    """
     df_raw = pd.read_csv(DATA_PATH)
-    df_raw = df_raw.dropna(subset=['CropStartDate', 'CropEndDate'])
+    df_raw['CreatedDate']   = pd.to_datetime(df_raw['CreatedDate'],   dayfirst=True, errors='coerce')
     df_raw['CropStartDate'] = pd.to_datetime(df_raw['CropStartDate'], dayfirst=True, errors='coerce')
     df_raw['CropEndDate']   = pd.to_datetime(df_raw['CropEndDate'],   dayfirst=True, errors='coerce')
     df_raw = df_raw.rename(columns={'Plant/Crop': 'Crop'})
-    sub = df_raw[(df_raw['Crop'] == crop) & (df_raw['SoilType'] == soil)].dropna(subset=['CropStartDate','CropEndDate'])
+
+    sub = df_raw[
+        (df_raw['Crop'] == crop) &
+        (df_raw['SoilType'] == soil)
+    ].dropna(subset=['CreatedDate'])
+
     if sub.empty:
         return {"windows": []}
-        
-    windows = sub[['CropStartDate', 'CropEndDate']].drop_duplicates().sort_values('CropStartDate')
-    
+
+    # Group by the calendar year of the actual sample CreatedDate
+    sub = sub.copy()
+    sub['sample_year'] = sub['CreatedDate'].dt.year
+
+    yearly = (
+        sub.groupby('sample_year')['CreatedDate']
+        .agg(first_sample='min', last_sample='max')
+        .reset_index()
+        .sort_values('first_sample')
+    )
+
     out = []
-    for _, row in windows.iterrows():
+    for _, row in yearly.iterrows():
+        fs = row['first_sample']
+        ls = row['last_sample']
+        # "Apr 2024 - Aug 2024"  (same year -> e.g. "Apr 2024 - Apr 2024" is fine too)
+        label = f"{fs.strftime('%b %Y')} - {ls.strftime('%b %Y')}"
         out.append({
-            "start": row['CropStartDate'].strftime('%Y-%m-%d'),
-            "end": row['CropEndDate'].strftime('%Y-%m-%d')
+            "label":        label,
+            "first_sample": fs.strftime('%Y-%m-%d %H:%M:%S'),
+            "last_sample":  ls.strftime('%Y-%m-%d %H:%M:%S'),
+            "year":         int(row['sample_year']),
         })
+
     return {"windows": out}
