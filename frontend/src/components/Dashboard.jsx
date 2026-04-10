@@ -90,7 +90,6 @@ export default function Dashboard() {
   const [plotType, setPlotType] = useState('line');
   const [activeTab, setActiveTab] = useState('summary');
   const [selectedWindow, setSelectedWindow] = useState('All');
-  const [displayUnit, setDisplayUnit] = useState('kg/ha');
 
   const [chartData, setChartData] = useState([]);
   const [summaryData, setSummaryData] = useState([]);
@@ -169,48 +168,24 @@ export default function Dashboard() {
     return out;
   }, [cropDateRange]);
 
-  // ── dynamic unit conversion ──
-  const derivedChartData = useMemo(() => {
-    if (displayUnit === 'kg/ha') return chartData;
-    return chartData.map(d => {
-      const newD = { ...d };
-      Object.keys(newD).forEach(k => {
-        if (typeof newD[k] === 'number') newD[k] = newD[k] * 1000;
-      });
-      return newD;
-    });
-  }, [chartData, displayUnit]);
-
-  const derivedSummaryData = useMemo(() => {
-    if (displayUnit === 'kg/ha') return summaryData;
-    return summaryData.map(s => ({
-      ...s,
-      latest: s.latest * 1000,
-      average: s.average * 1000,
-      min: s.min * 1000,
-      max: s.max * 1000,
-      unit: 'g/ha'
-    }));
-  }, [summaryData, displayUnit]);
-
   // ── filtered chart data — compare CreatedDate against first/last sample bounds ──
   const filteredChartData = useMemo(() => {
-    if (selectedWindow === 'All') return derivedChartData;
+    if (selectedWindow === 'All') return chartData;
     const win = availableWindows.find(w => w.value === selectedWindow);
-    if (!win) return derivedChartData;
-    return derivedChartData.filter(d => {
+    if (!win) return chartData;
+    return chartData.filter(d => {
       // d.date = "2024-04-08 14:05:00 (Batch 13853)"
       const m = String(d.date).match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})|(\d{4}-\d{2}-\d{2})/);
       if (!m) return true;
       const dtVal = new Date(m[0]);   // full datetime if present, else date-only
       return dtVal >= win.firstSample && dtVal <= win.lastSample;
     });
-  }, [derivedChartData, selectedWindow, availableWindows]);
+  }, [chartData, selectedWindow, availableWindows]);
 
   // ── sidebar helpers ──
   const sortedSummaryData = useMemo(() =>
-    [...derivedSummaryData].sort((a, b) => b.latest - a.latest).filter(s => s.max > 0),
-    [derivedSummaryData]
+    [...summaryData].sort((a, b) => b.latest - a.latest).filter(s => s.max > 0),
+    [summaryData]
   );
 
   const toggleMeasure = m => {
@@ -236,7 +211,7 @@ export default function Dashboard() {
   const measuresByUnit = useMemo(() => {
     const g = {};
     visibleSummaryData.forEach((stat, i) => {
-      const u = stat.unit || displayUnit;
+      const u = stat.unit;
       if (!g[u]) g[u] = [];
       g[u].push({ ...stat, color: COLORS[i % COLORS.length] });
     });
@@ -246,7 +221,7 @@ export default function Dashboard() {
   const piePerUnit = useMemo(() => {
     const g = {};
     visibleSummaryData.filter(s => s.latest > 0).forEach((s, i) => {
-      const u = s.unit || displayUnit;
+      const u = s.unit;
       if (!g[u]) g[u] = [];
       g[u].push({ name: s.measure, value: s.latest, fill: COLORS[i % COLORS.length] });
     });
@@ -258,7 +233,7 @@ export default function Dashboard() {
   const meanPiePerUnit = useMemo(() => {
     const g = {};
     visibleSummaryData.filter(s => s.average > 0).forEach((s, i) => {
-      const u = s.unit || displayUnit;
+      const u = s.unit;
       if (!g[u]) g[u] = [];
       g[u].push({ name: s.measure, value: s.average, fill: COLORS[i % COLORS.length] });
     });
@@ -525,7 +500,7 @@ export default function Dashboard() {
               Soil Analytics
             </h1>
             <p className="text-slate-500 dark:text-slate-400 dark:text-slate-500 mt-3 text-base font-semibold max-w-xl leading-relaxed">
-              Historical soil nutrient tracking across crops and soil types — normalized to {displayUnit}.
+              Historical soil nutrient tracking across crops and soil types.
             </p>
           </div>
 
@@ -538,19 +513,6 @@ export default function Dashboard() {
             >
               {isDark ? <Sun className="w-5 h-5 text-amber-500" /> : <Moon className="w-5 h-5 text-indigo-500" />}
             </button>
-
-            {/* Unit */}
-            <div className="flex flex-col gap-1">
-              <label className="text-[11px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-widest px-1 flex items-center gap-1">Unit</label>
-              <div className="relative">
-                <select value={displayUnit} onChange={e => setDisplayUnit(e.target.value)}
-                  className="appearance-none bg-slate-50 dark:bg-slate-950 border-2 border-slate-100 text-slate-700 dark:text-slate-300 py-3 pl-4 pr-10 rounded-xl focus:outline-none focus:ring-4 focus:ring-rose-500/20 focus:border-rose-500 font-black hover:border-slate-300 cursor-pointer text-sm">
-                  <option value="kg/ha">kg/ha</option>
-                  <option value="g/ha">g/ha</option>
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-rose-500" />
-              </div>
-            </div>
 
             {/* Chart type */}
             <div className="flex flex-col gap-1">
